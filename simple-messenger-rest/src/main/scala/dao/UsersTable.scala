@@ -10,7 +10,7 @@ trait UsersTable {
   this : AppConf =>
 
   class Users(tag: Tag) extends Table[(Long, String, String)](tag, "users") {
-    def id = column[Long]("SUP_ID", O.PrimaryKey)
+    def id = column[Long]("SUP_ID", O.PrimaryKey,O.AutoInc)
     def username = column[String]("username",O.Unique)
     def pwd = column[String]("pwd")
 

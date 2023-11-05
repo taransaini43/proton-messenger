@@ -10,8 +10,8 @@ import service.UserService
 
 import scala.io.StdIn
 import scala.util.Try
-
 import spray.json._
+import utils.AppUtils
 
 object ApplicationServer  {
 
@@ -27,37 +27,28 @@ object ApplicationServer  {
     lazy val servicePort : Int = Try(config.getInt("service.port")).getOrElse(8080)
 
     val routes = {
+      // application DSL routes
+      pathPrefix("create") {
+        path("user") {
+          post {
+            entity(as[String]) { inputStr =>
+              val json = inputStr.parseJson
+              // val userInput = json.convertTo[UserInput]
+              // Better way is to parse via case classes - defined UserInput below this class for reference
+              val uname = json.asInstanceOf[JsObject].fields.get("username").getOrElse("").toString
+              val pcode = json.asInstanceOf[JsObject].fields.get("passcode").getOrElse("").toString
 
-      // test routes
-      path("pingtest") {
-        get {
-          complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Server basic get ping response test</h1>"))
-        }
-      }~ path("createTestUser") {
-      get {
-        UserService.createTestUser()
-        complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Server basic persistence test</h1>"))
-      }
-    } ~
-    path("getTestUser") {
-      get {
-        val res = UserService.getUser("tj123")
-        println(res.get.toString)
-        complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Server basic persistence test</h1>"))
-      }
-
-
-      // legit routes
-    }~ pathPrefix("create") {
-          path("user") {
-            post {
-              entity(as[String]) { inputStr =>
-                println(inputStr)
-                val inputJson = inputStr.parseJson
-                complete(HttpEntity(ContentTypes.`application/json`, inputStr))
+              UserService.getUser(uname) match {
+                case Some(u) => // found existing user, can't register
+                  complete(HttpEntity(ContentTypes.`application/json`, "{“status”:”failure”, “message”:”User already exists”}"))
+                case None => // no matching user
+                  UserService.createUser(uname, AppUtils.encodeStr(pcode)) // idealy encrypt
+                  complete(HttpEntity(ContentTypes.`application/json`,"{\"status\":\"success\"}" ))
               }
+
             }
           }
+        }
       } ~
         path("login") {
           post {
@@ -66,21 +57,74 @@ object ApplicationServer  {
               import spray.json._
 
               val json = inputStr.parseJson
-              // val userInput = json.convertTo[UserInput]
-              // Better way is to parse via case classes - defined UserInput below this class for reference
               val uname = json.asInstanceOf[JsObject].fields.get("username").getOrElse("").toString
               val pcode = json.asInstanceOf[JsObject].fields.get("passcode").getOrElse("").toString
 
               UserService.getUser(uname) match {
                 case Some(u) => // found existing user
+                  if (pcode.equals(AppUtils.decodeStr(u.pwd))) {
+                    complete(HttpEntity(ContentTypes.`application/json`, "{\"status\":\"success\"}"))
+                    // TODO : set cookie in browser for keeping the user logged in
+                  } else
+                    complete(HttpEntity(ContentTypes.`application/json`, "{\"status\":\"failure\"}"))
                 case None => // no matching user
+                  complete(HttpEntity(ContentTypes.`application/json`, "{\"status\":\"failure\"}"))
               }
-
-              complete(HttpEntity(ContentTypes.`application/json`, inputStr))
             }
           }
+        } ~ pathPrefix("send") {
+              pathPrefix("text") {
+                path("user") {
+                  post {
+                    entity(as[String]) { inputStr =>
+                      // TODO : send data to server - can keep in memory cache or a distributed cache like Redis
+                      complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\""))
+                    }
+                  }
+      }}
+      } ~ pathPrefix("get") {
+        path("unread") {
+          get {
+            // TODO : 1. fetch data/messages set in memory cache for logged in user
+            // TODO : 2. post sending, also persist in db/s3/disk to maintain chat history
+            val unreadMessagesFromCache = "" // TODO
+            complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"“message”\":$unreadMessagesFromCache}"))
+          }
         }
-      }
+      } ~ pathPrefix("get") {
+                  path("history") {
+                    get {
+                      // TODO : fetch history persisted on disk/db/s3 (Read messages) corresponding to the user
+                     val textsFromUser ="" // TODO
+                      complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"data\":$textsFromUser}"))
+                    }
+                  }
+        }~ pathPrefix("get") {
+        path("users") {
+          get {
+              val userData = UserService.getAllUsers().mkString("[",",","]")
+              complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"data\":$userData}"))
+          }
+        }
+        // test routes - ideally scalatests or junits
+      } ~ path("pingtest") { // can be turned into a health check
+        get {
+          complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Server basic get ping response test</h1>"))
+        }
+      } ~ path("createTestUser") {
+        get {
+          UserService.createTestUser()
+          complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Server basic persistence test</h1>"))
+        }
+      } ~
+        path("getTestUser") {
+          get {
+            val res = UserService.getUser("tj123")
+            println(res.get.toString)
+            complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Server basic persistence test</h1>"))
+          }
+        }
+    }
 
     val bindingFuture = Http().newServerAt(serviceHost, servicePort).bind(routes)
 
