@@ -43,7 +43,7 @@ object ApplicationServer  {
                   complete(HttpEntity(ContentTypes.`application/json`, "{“status”:”failure”, “message”:”User already exists”}"))
                 case None => // no matching user
                   UserService.createUser(uname, AppUtils.encodeStr(pcode)) // idealy encrypt
-                  complete(HttpEntity(ContentTypes.`application/json`, inputStr))
+                  complete(HttpEntity(ContentTypes.`application/json`,"{\"status\":\"success\"}" ))
               }
 
             }
