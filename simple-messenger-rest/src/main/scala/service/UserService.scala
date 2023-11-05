@@ -37,4 +37,20 @@ object UserService extends UsersTable with AppConf{
     val setupFuture = Await.result(db.run(setup), 1.seconds)
   }
 
+  def createUser(uname : String, pwd : String): Unit = {
+    val addUserAction = DBIO.seq(
+      users += (0, uname, pwd)
+    )
+
+   Await.result(db.run(addUserAction), 1.seconds)
+    // TODO : Exception Handling in case of db failure
+  }
+
+  def getAllUsers () : Seq[String] = {
+    val f = db.run(users.result)
+
+    Await.result(f, 10.seconds).map(x => x._2)
+    // TODO : add none/empty check as well before rturning - make Option
+  }
+
 }
