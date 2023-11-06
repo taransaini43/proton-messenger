@@ -4,6 +4,7 @@ import akka.actor.typed.ActorSystem
 import akka.actor.typed.scaladsl.Behaviors
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model._
+import akka.http.scaladsl.model.headers.HttpCookie
 import akka.http.scaladsl.server.Directives._
 import com.typesafe.config.ConfigFactory
 import service.UserService
@@ -35,8 +36,8 @@ object ApplicationServer  {
               val json = inputStr.parseJson
               // val userInput = json.convertTo[UserInput]
               // Better way is to parse via case classes - defined UserInput below this class for reference
-              val uname = json.asInstanceOf[JsObject].fields.get("username").getOrElse("").toString
-              val pcode = json.asInstanceOf[JsObject].fields.get("passcode").getOrElse("").toString
+              val uname = json.asInstanceOf[JsObject].fields.get("username").getOrElse("").toString.replaceAll("\"", "")
+              val pcode = json.asInstanceOf[JsObject].fields.get("passcode").getOrElse("").toString.replaceAll("\"", "")
 
               UserService.getUser(uname) match {
                 case Some(u) => // found existing user, can't register
@@ -57,18 +58,35 @@ object ApplicationServer  {
               import spray.json._
 
               val json = inputStr.parseJson
-              val uname = json.asInstanceOf[JsObject].fields.get("username").getOrElse("").toString
-              val pcode = json.asInstanceOf[JsObject].fields.get("passcode").getOrElse("").toString
+              val uname = json.asInstanceOf[JsObject].fields.get("username").getOrElse("").toString.replaceAll("\"", "")
+              val pcode = json.asInstanceOf[JsObject].fields.get("passcode").getOrElse("").toString.replaceAll("\"", "")
 
               UserService.getUser(uname) match {
                 case Some(u) => // found existing user
                   if (pcode.equals(AppUtils.decodeStr(u.pwd))) {
-                    complete(HttpEntity(ContentTypes.`application/json`, "{\"status\":\"success\"}"))
-                    // TODO : set cookie in browser for keeping the user logged in
+
+                    setCookie(HttpCookie("user-cookie-id", value = uname)) {
+                      complete(HttpEntity(ContentTypes.`application/json`, "{\"status\":\"success\"}"))
+                    }
                   } else
                     complete(HttpEntity(ContentTypes.`application/json`, "{\"status\":\"failure\"}"))
                 case None => // no matching user
                   complete(HttpEntity(ContentTypes.`application/json`, "{\"status\":\"failure\"}"))
+              }
+            }
+          }
+        } ~
+        path("logout") {
+          post {
+            entity(as[String]) { inputStr =>
+              import MyJsonProtocol._
+              import spray.json._
+
+              val json = inputStr.parseJson
+              val uname = json.asInstanceOf[JsObject].fields.get("username").getOrElse("").toString.replaceAll("\"", "")
+
+              deleteCookie("user-cookie-id") {
+                complete(HttpEntity(ContentTypes.`application/json`, "{\"status\":\"success\"}"))
               }
             }
           }
