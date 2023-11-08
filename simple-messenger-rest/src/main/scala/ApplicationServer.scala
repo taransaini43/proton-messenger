@@ -18,10 +18,10 @@ import utils.AppUtils
 
 import scala.concurrent.duration.DurationInt
 
-object ApplicationServer  {
+object ApplicationServer {
 
 
-  val cache : LoadingCache[String, List[TextMsg]]=
+  val cache: LoadingCache[String, List[TextMsg]] =
     Scaffeine()
       .recordStats()
       .expireAfterWrite(1.hour)
@@ -36,8 +36,8 @@ object ApplicationServer  {
     val config = ConfigFactory.load()
     UserService.init()
 
-    lazy val serviceHost : String = Try(config.getString("service.host")).getOrElse("localhost")
-    lazy val servicePort : Int = Try(config.getInt("service.port")).getOrElse(8080)
+    lazy val serviceHost: String = Try(config.getString("service.host")).getOrElse("localhost")
+    lazy val servicePort: Int = Try(config.getInt("service.port")).getOrElse(8080)
 
     val routes = {
       // application DSL routes
@@ -56,7 +56,7 @@ object ApplicationServer  {
                   complete(HttpEntity(ContentTypes.`application/json`, "{“status”:”failure”, “message”:”User already exists”}"))
                 case None => // no matching user
                   UserService.createUser(uname, AppUtils.encodeStr(pcode)) // idealy encrypt
-                  complete(HttpEntity(ContentTypes.`application/json`,"{\"status\":\"success\"}" ))
+                  complete(HttpEntity(ContentTypes.`application/json`, "{\"status\":\"success\"}"))
               }
 
             }
@@ -90,81 +90,97 @@ object ApplicationServer  {
         } ~
         path("logout") {
           post {
-            entity(as[String]) { inputStr =>
-              import MyJsonProtocol._
-              import spray.json._
+            optionalCookie("user-cookie-id") { // can only send text if logged in
+              case Some(cookieValue) =>
+                entity(as[String]) { inputStr =>
+                  import MyJsonProtocol._
+                  import spray.json._
+                  val json = inputStr.parseJson
+                  val userToLogout = json.asInstanceOf[JsObject].fields.get("username").getOrElse("").toString.replaceAll("\"", "")
 
-              val json = inputStr.parseJson
-              val uname = json.asInstanceOf[JsObject].fields.get("username").getOrElse("").toString.replaceAll("\"", "")
+                  if (cookieValue.value.split("=")(0).equals(userToLogout)) {
+                    deleteCookie("user-cookie-id") {
+                      complete(HttpEntity(ContentTypes.`application/json`, "{\"status\":\"success\"}"))
+                    }
+                  } else {
+                    complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"failure\" , \"error_message\":\"need to be logged in to logout\"}"))
+                  }
+                }
+              case None =>
+                complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"failure\" , \"error_message\":\"need to be logged in to logout\"}"))
 
-              deleteCookie("user-cookie-id") {
-                complete(HttpEntity(ContentTypes.`application/json`, "{\"status\":\"success\"}"))
-              }
             }
           }
         } ~ pathPrefix("send") {
-              pathPrefix("text") {
-                path("user") {
-                  post {
-                    extractRequest {
-                      request =>
-                        cookie("user-cookie-id"){ // can only send text if logged in
-                          cookieValue =>
-                            entity(as[String]) { inputStr =>
-                              val json = inputStr.parseJson
-                              val fromUsername = json.asInstanceOf[JsObject].fields.get("from").getOrElse("").toString.replaceAll("\"", "")
-                              val toUsername = json.asInstanceOf[JsObject].fields.get("to").getOrElse("").toString.replaceAll("\"", "")
-                              val textToSend = json.asInstanceOf[JsObject].fields.get("text").getOrElse("").toString.replaceAll("\"", "")
+        pathPrefix("text") {
+          path("user") {
+            post {
+              extractRequest {
+                request =>
+                  optionalCookie("user-cookie-id") { // can only send text if logged in
+                    case Some(cookieValue) =>
+                      entity(as[String]) { inputStr =>
+                        val json = inputStr.parseJson
+                        val fromUsername = json.asInstanceOf[JsObject].fields.get("from").getOrElse("").toString.replaceAll("\"", "")
+                        val toUsername = json.asInstanceOf[JsObject].fields.get("to").getOrElse("").toString.replaceAll("\"", "")
+                        val textToSend = json.asInstanceOf[JsObject].fields.get("text").getOrElse("").toString.replaceAll("\"", "")
 
-                              if(cookieValue.value.split("=")(0).equals(fromUsername)){
-                                val existingUnreadTexts = cache.get(toUsername)
-                                cache.put(toUsername, existingUnreadTexts :+ TextMsg(fromUsername, textToSend))
-                                complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\"}"))
-                              }else{
-                                complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"failure\" , \"error_message\":\"need to be logged in to send message\"}"))
-                              }
-                            }
+                        if (cookieValue.value.split("=")(0).equals(fromUsername)) {
+                          val existingUnreadTexts = cache.get(toUsername)
+                          cache.put(toUsername, existingUnreadTexts :+ TextMsg(fromUsername, textToSend))
+                          complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\"}"))
+                        } else {
+                          complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"failure\" , \"error_message\":\"need to be logged in to send message\"}"))
                         }
-
-                    }
+                      }
+                    case None =>
+                      complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"failure\" , \"error_message\":\"need to be logged in to send message\"}"))
 
                   }
-      }}
-      } ~ pathPrefix("get") {
-        path("unread") {
-          get {
-            cookie("user-cookie-id") { // can only send text if logged in
-              cookieValue =>
-            entity(as[String]) { inputStr =>
-                val uname = inputStr.parseJson.asInstanceOf[JsObject].fields.get("username").getOrElse("").toString.replaceAll("\"", "")
-                if (cookieValue.value.split("=")(0).equals(uname)) {
-                  val unreadMessagesFromCache = cache.get(uname)
-                  // assumption is that this endpoint is used by a SMS interface which will implement the actual send message functionality
-                  val res = unreadMessagesFromCache.groupBy(_.from)
-                            .map(y => s"{\"username\":\"${y._1}\", \"texts\": [${y._2.map(t => "\"" + t.txt + "\"").mkString(",")}]}")
-                              .mkString(",")
-                // TODO : 2. post sending, also persist in db/s3/disk to maintain chat history
-                  complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"message\": \"You have message(s)\", \"data\" : [$res\n]}"))
 
-              } else {
-                  complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"failure\" , \"error_message\":\"need to be logged in to receive message(s)\"}"))
               }
+
             }
           }
         }
-      }} ~ pathPrefix("get") {
-                  path("history") {
-                    get {
-                      // TODO : fetch history persisted on disk/db/s3 (Read messages) corresponding to the user
-                     val textsFromUser ="" // TODO
-                      complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"data\":$textsFromUser}"))
-                    }
+      } ~ pathPrefix("get") {
+        path("unread") {
+          get {
+            optionalCookie("user-cookie-id") { // can only send text if logged in
+              case Some(cookieValue) =>
+                entity(as[String]) { inputStr =>
+                  val uname = inputStr.parseJson.asInstanceOf[JsObject].fields.get("username").getOrElse("").toString.replaceAll("\"", "")
+                  if (cookieValue.value.split("=")(0).equals(uname)) {
+                    val unreadMessagesFromCache = cache.get(uname)
+                    // assumption is that this endpoint is used by a SMS interface which will implement the actual send message functionality
+                    val res = unreadMessagesFromCache.groupBy(_.from)
+                      .map(y => s"{\"username\":\"${y._1}\", \"texts\": [${y._2.map(t => "\"" + t.txt + "\"").mkString(",")}]}")
+                      .mkString(",")
+                    // TODO : 2. post sending, also persist in db/s3/disk to maintain chat history
+                    complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"message\": \"You have message(s)\", \"data\" : [$res\n]}"))
+                  } else {
+                    complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"failure\" , \"error_message\":\"need to be logged in to receive message(s)\"}"))
                   }
-        }~ pathPrefix("get") {
+                }
+              case None =>
+                complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"failure\" , \"error_message\":\"need to be logged in to receive message(s)\"}"))
+
+            }
+          }
+        }
+      } ~ pathPrefix("get") {
+        path("history") {
+          get {
+            // TODO : fetch history persisted on disk/db/s3 (Read messages) corresponding to the user
+            val textsFromUser = "" // TODO
+            complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"data\":$textsFromUser}"))
+          }
+        }
+      } ~ pathPrefix("get") {
         path("users") {
           get {
-              val userData = UserService.getAllUsers().mkString("[",",","]")
-              complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"data\":$userData}"))
+            val userData = UserService.getAllUsers().mkString("[", ",", "]")
+            complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"data\":$userData}"))
           }
         }
       } ~ path("pingtest") { // can be turned into a health check
@@ -186,11 +202,12 @@ object ApplicationServer  {
 
 
 case class UserInput(username: String, passcode: String)
+
 object MyJsonProtocol extends DefaultJsonProtocol {
   implicit val jsonFormat2: JsonFormat[UserInput] = lazyFormat(jsonFormat(UserInput, "i", "foo"))
 }
 
-case class TextMsg (from : String, txt : String)
+case class TextMsg(from: String, txt: String)
 
 //def formatMsgResponse (user : String, messages :)
 
