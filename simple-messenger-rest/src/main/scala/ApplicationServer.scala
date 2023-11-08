@@ -3,18 +3,30 @@ package docs.http.scaladsl
 import akka.actor.typed.ActorSystem
 import akka.actor.typed.scaladsl.Behaviors
 import akka.http.scaladsl.Http
-import akka.http.scaladsl.model._
+import akka.http.scaladsl.model.{HttpEntity, _}
 import akka.http.scaladsl.model.headers.HttpCookie
 import akka.http.scaladsl.server.Directives._
+import com.github.blemale.scaffeine.{AsyncLoadingCache, Cache, LoadingCache, Scaffeine}
 import com.typesafe.config.ConfigFactory
 import service.UserService
+import spray.json.DefaultJsonProtocol.{StringJsonFormat, immIterableFormat, mapFormat}
 
 import scala.io.StdIn
 import scala.util.Try
 import spray.json._
 import utils.AppUtils
 
+import scala.concurrent.duration.DurationInt
+
 object ApplicationServer  {
+
+
+  val cache : LoadingCache[String, List[TextMsg]]=
+    Scaffeine()
+      .recordStats()
+      .expireAfterWrite(1.hour)
+      .maximumSize(500)
+      .build((s: String) => List())
 
   def main(args: Array[String]): Unit = {
 
@@ -94,19 +106,43 @@ object ApplicationServer  {
               pathPrefix("text") {
                 path("user") {
                   post {
-                    entity(as[String]) { inputStr =>
-                      // TODO : send data to server - can keep in memory cache or a distributed cache like Redis
-                      complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\""))
+                    extractRequest {
+                      request =>
+                        cookie("user-cookie-id"){
+                          cookieValue =>
+                            entity(as[String]) { inputStr =>
+                              val json = inputStr.parseJson
+                              val fromUsername = json.asInstanceOf[JsObject].fields.get("from").getOrElse("").toString.replaceAll("\"", "")
+                              val toUsername = json.asInstanceOf[JsObject].fields.get("to").getOrElse("").toString.replaceAll("\"", "")
+                              val textToSend = json.asInstanceOf[JsObject].fields.get("text").getOrElse("").toString.replaceAll("\"", "")
+
+                              if(cookieValue.value.split("=")(0).equals(fromUsername)){
+                                val existingUnreadTexts = cache.get(toUsername)
+                                cache.put(toUsername, existingUnreadTexts :+ TextMsg(fromUsername, textToSend))
+                                complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\"}"))
+                              }else{
+                                complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"failure\" , \"error_message\":\"need to be logged in to send message\"}"))
+                              }
+                            }
+                        }
+
                     }
+
                   }
       }}
       } ~ pathPrefix("get") {
         path("unread") {
           get {
-            // TODO : 1. fetch data/messages set in memory cache for logged in user
-            // TODO : 2. post sending, also persist in db/s3/disk to maintain chat history
-            val unreadMessagesFromCache = "" // TODO
-            complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"“message”\":$unreadMessagesFromCache}"))
+            entity(as[String]) {
+              inputStr =>
+                val uname = inputStr.parseJson.asInstanceOf[JsObject].fields.get("username").getOrElse("").toString.replaceAll("\"", "")
+                val unreadMessagesFromCache = cache.get(uname)
+                // assumption is that this endpoint is used by a SMS interface which will implement the actual send message functionality
+                val res = unreadMessagesFromCache.groupBy(_.from)
+                  .map(y => s"{\"username\":\"${y._1}\", \"texts\": [${y._2.map(t => "\""+t.txt+"\"").mkString(",")}]}").mkString(",")
+                // TODO : 2. post sending, also persist in db/s3/disk to maintain chat history
+                complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"message\": \"You have message(s)\", \"data\" : [$res\n]}"))
+            }
           }
         }
       } ~ pathPrefix("get") {
@@ -124,24 +160,11 @@ object ApplicationServer  {
               complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"data\":$userData}"))
           }
         }
-        // test routes - ideally scalatests or junits
       } ~ path("pingtest") { // can be turned into a health check
         get {
           complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Server basic get ping response test</h1>"))
         }
-      } ~ path("createTestUser") {
-        get {
-          UserService.createTestUser()
-          complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Server basic persistence test</h1>"))
-        }
-      } ~
-        path("getTestUser") {
-          get {
-            val res = UserService.getUser("tj123")
-            println(res.get.toString)
-            complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Server basic persistence test</h1>"))
-          }
-        }
+      }
     }
 
     val bindingFuture = Http().newServerAt(serviceHost, servicePort).bind(routes)
@@ -159,4 +182,8 @@ case class UserInput(username: String, passcode: String)
 object MyJsonProtocol extends DefaultJsonProtocol {
   implicit val jsonFormat2: JsonFormat[UserInput] = lazyFormat(jsonFormat(UserInput, "i", "foo"))
 }
+
+case class TextMsg (from : String, txt : String)
+
+//def formatMsgResponse (user : String, messages :)
 
