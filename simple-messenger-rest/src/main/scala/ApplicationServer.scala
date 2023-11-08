@@ -108,7 +108,7 @@ object ApplicationServer  {
                   post {
                     extractRequest {
                       request =>
-                        cookie("user-cookie-id"){
+                        cookie("user-cookie-id"){ // can only send text if logged in
                           cookieValue =>
                             entity(as[String]) { inputStr =>
                               val json = inputStr.parseJson
@@ -133,19 +133,26 @@ object ApplicationServer  {
       } ~ pathPrefix("get") {
         path("unread") {
           get {
-            entity(as[String]) {
-              inputStr =>
+            cookie("user-cookie-id") { // can only send text if logged in
+              cookieValue =>
+            entity(as[String]) { inputStr =>
                 val uname = inputStr.parseJson.asInstanceOf[JsObject].fields.get("username").getOrElse("").toString.replaceAll("\"", "")
-                val unreadMessagesFromCache = cache.get(uname)
-                // assumption is that this endpoint is used by a SMS interface which will implement the actual send message functionality
-                val res = unreadMessagesFromCache.groupBy(_.from)
-                  .map(y => s"{\"username\":\"${y._1}\", \"texts\": [${y._2.map(t => "\""+t.txt+"\"").mkString(",")}]}").mkString(",")
+                if (cookieValue.value.split("=")(0).equals(uname)) {
+                  val unreadMessagesFromCache = cache.get(uname)
+                  // assumption is that this endpoint is used by a SMS interface which will implement the actual send message functionality
+                  val res = unreadMessagesFromCache.groupBy(_.from)
+                            .map(y => s"{\"username\":\"${y._1}\", \"texts\": [${y._2.map(t => "\"" + t.txt + "\"").mkString(",")}]}")
+                              .mkString(",")
                 // TODO : 2. post sending, also persist in db/s3/disk to maintain chat history
-                complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"message\": \"You have message(s)\", \"data\" : [$res\n]}"))
+                  complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"message\": \"You have message(s)\", \"data\" : [$res\n]}"))
+
+              } else {
+                  complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"failure\" , \"error_message\":\"need to be logged in to receive message(s)\"}"))
+              }
             }
           }
         }
-      } ~ pathPrefix("get") {
+      }} ~ pathPrefix("get") {
                   path("history") {
                     get {
                       // TODO : fetch history persisted on disk/db/s3 (Read messages) corresponding to the user
