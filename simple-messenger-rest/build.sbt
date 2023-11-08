@@ -18,7 +18,9 @@ libraryDependencies ++= Seq(
   "org.slf4j" % "slf4j-nop" % "2.0.5",
   "com.typesafe.slick" %% "slick-hikaricp" % "3.4.1",
   "org.xerial" % "sqlite-jdbc" % "3.42.0.0",
-  "io.spray" %%  "spray-json" % "1.3.6"
+  "io.spray" %%  "spray-json" % "1.3.6",
+
+  "com.github.blemale" %% "scaffeine" % "5.2.1"
 
 )
 
