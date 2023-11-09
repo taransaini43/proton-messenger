@@ -8,7 +8,7 @@ import akka.http.scaladsl.model.headers.HttpCookie
 import akka.http.scaladsl.server.Directives._
 import com.github.blemale.scaffeine.{AsyncLoadingCache, Cache, LoadingCache, Scaffeine}
 import com.typesafe.config.ConfigFactory
-import service.UserService
+import service.{MessageService, UserService}
 import spray.json.DefaultJsonProtocol.{StringJsonFormat, immIterableFormat, mapFormat}
 
 import scala.io.StdIn
@@ -35,6 +35,7 @@ object ApplicationServer {
 
     val config = ConfigFactory.load()
     UserService.init()
+    MessageService.init()
 
     lazy val serviceHost: String = Try(config.getString("service.host")).getOrElse("localhost")
     lazy val servicePort: Int = Try(config.getInt("service.port")).getOrElse(8080)
@@ -127,7 +128,7 @@ object ApplicationServer {
 
                         if (cookieValue.value.split("=")(0).equals(fromUsername)) {
                           val existingUnreadTexts = cache.get(toUsername)
-                          cache.put(toUsername, existingUnreadTexts :+ TextMsg(fromUsername, textToSend))
+                          cache.put(toUsername, existingUnreadTexts :+ TextMsg(fromUsername, textToSend,toUsername))
                           complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\"}"))
                         } else {
                           complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"failure\" , \"error_message\":\"need to be logged in to send message\"}"))
@@ -156,7 +157,18 @@ object ApplicationServer {
                     val res = unreadMessagesFromCache.groupBy(_.from)
                       .map(y => s"{\"username\":\"${y._1}\", \"texts\": [${y._2.map(t => "\"" + t.txt + "\"").mkString(",")}]}")
                       .mkString(",")
-                    // TODO : 2. post sending, also persist in db/s3/disk to maintain chat history
+
+                    // post succesful sending, also persist in db/s3/disk to maintain chat history
+                    unreadMessagesFromCache.foreach(txtMsg => {
+                      val u1Id = UserService.getUser(txtMsg.from).get.id
+                      val u2Id = UserService.getUser(txtMsg.to).get.id
+                      MessageService.getConvoId(u1Id,u2Id) match {
+                        case Some(cId) => MessageService.updateConvo(cId,u1Id,u2Id,txtMsg.txt)
+                        case None => MessageService.addConvo(u1Id,u2Id,txtMsg.txt)
+                      }
+
+                    })
+
                     complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"message\": \"You have message(s)\", \"data\" : [$res\n]}"))
                   } else {
                     complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"failure\" , \"error_message\":\"need to be logged in to receive message(s)\"}"))
@@ -171,16 +183,36 @@ object ApplicationServer {
       } ~ pathPrefix("get") {
         path("history") {
           get {
-            // TODO : fetch history persisted on disk/db/s3 (Read messages) corresponding to the user
-            val textsFromUser = "" // TODO
-            complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"data\":$textsFromUser}"))
+            entity(as[String]) { inputStr =>
+              val user1 = inputStr.parseJson.asInstanceOf[JsObject].fields.get("friend").getOrElse("").toString.replaceAll("\"", "")
+              val user2 = inputStr.parseJson.asInstanceOf[JsObject].fields.get("user").getOrElse("").toString.replaceAll("\"", "")
+
+              // fetch history persisted on disk/db/s3 (Read messages) corresponding to the user
+              val u1Id = UserService.getUser(user1).get.id
+              val u2Id = UserService.getUser(user2).get.id
+
+              val idNameMap = Map (u1Id -> user1, u2Id -> user2)
+
+              val msgs = MessageService.getConvoId(u1Id,u2Id) match {
+                case Some(convId) => MessageService.getMessagesByConversation(convId)
+                case None => Seq()
+              }
+              if(msgs.nonEmpty){
+                val formattedMsgTrail = msgs.map(x => s"\"${idNameMap.get(x._2).get}\":\"${x._3}\"").mkString(",")
+                complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"data\":[${formattedMsgTrail}]}"))
+              }else{
+                complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"data\":No history found between $user1 and $user2}"))
+
+              }
+
+            }
           }
         }
       } ~ pathPrefix("get") {
         path("users") {
           get {
-            val userData = UserService.getAllUsers().mkString("[", ",", "]")
-            complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"data\":$userData}"))
+            val userData = UserService.getAllUsers().map(x=> "\""+x+"\"").mkString(",")
+            complete(HttpEntity(ContentTypes.`application/json`, s"{\"status\":\"success\" , \"data\":[$userData]}"))
           }
         }
       } ~ path("pingtest") { // can be turned into a health check
@@ -207,7 +239,7 @@ object MyJsonProtocol extends DefaultJsonProtocol {
   implicit val jsonFormat2: JsonFormat[UserInput] = lazyFormat(jsonFormat(UserInput, "i", "foo"))
 }
 
-case class TextMsg(from: String, txt: String)
+case class TextMsg(from: String, txt: String, to : String)
 
 //def formatMsgResponse (user : String, messages :)
 

@@ -21,6 +21,7 @@ object UserService extends UsersTable with AppConf{
 
     // create table schema
     val f1 = db.run(users.schema.createIfNotExists)
+
     Await.result(Future.sequence(List(f1)), 5.seconds)
   }
 
