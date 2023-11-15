@@ -12,7 +12,7 @@ import service.{MessageService, UserService}
 import spray.json.DefaultJsonProtocol.{StringJsonFormat, immIterableFormat, mapFormat}
 
 import scala.io.StdIn
-import scala.util.Try
+import scala.util.{Failure, Success, Try}
 import spray.json._
 import utils.AppUtils
 
@@ -37,7 +37,7 @@ object ApplicationServer {
     UserService.init()
     MessageService.init()
 
-    lazy val serviceHost: String = Try(config.getString("service.host")).getOrElse("localhost")
+    lazy val serviceHost: String = Try(config.getString("service.host")).getOrElse("0.0.0.0")
     lazy val servicePort: Int = Try(config.getInt("service.port")).getOrElse(8080)
 
     val routes = {
@@ -225,10 +225,15 @@ object ApplicationServer {
     val bindingFuture = Http().newServerAt(serviceHost, servicePort).bind(routes)
 
     println(s"Server now online. Please navigate to http://localhost:8080/pingtest\nPress RETURN to stop...")
-    StdIn.readLine()
+
+    // The following line will keep the server running
+    // until it's manually terminated or encounters an error.
     bindingFuture
-      .flatMap(_.unbind())
-      .onComplete(_ => system.terminate())
+      .flatMap(_ => system.whenTerminated)
+      .onComplete {
+        case Success(_) => println("Server terminated gracefully.")
+        case Failure(ex) => println(s"Server terminated with error: ${ex.getMessage}")
+      }
   }
 }
 

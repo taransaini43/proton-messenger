@@ -29,3 +29,14 @@ resolvers ++= Seq(
   "Akka library repository" at "https://repo.akka.io/maven",
   "Typesafe repository" at "https://repo.typesafe.com/typesafe/releases/"
 )
+
+assembly / assemblyMergeStrategy := {
+  case PathList("META-INF", "versions", "9", "module-info.class") =>
+    MergeStrategy.first
+  case PathList("META-INF", "versions", "8", "module-info.class") =>
+    MergeStrategy.first
+  // Add more cases for other versions or dependencies as needed
+  case x =>
+    val oldStrategy = (assembly / assemblyMergeStrategy).value
+    oldStrategy(x)
+}
